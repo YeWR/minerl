@@ -17,6 +17,7 @@ Controls (pygame window must be focused):
 
 import argparse
 import sys
+import time
 
 import gym
 import numpy as np
@@ -25,7 +26,6 @@ import minerl
 pygame = None
 
 CAMERA_SPEED = 5.0
-
 
 KEY_TO_ACTION = {
     'w': 'forward',
@@ -74,6 +74,28 @@ def build_action(env, pressed_keys, camera_delta):
     return action
 
 
+def dump_obs(obs, label=""):
+    """Print detailed obs structure."""
+    print(f"\n=== OBS DUMP {label} ===")
+    for k, v in obs.items():
+        if k == 'pov':
+            print(f"  pov: shape={v.shape} dtype={v.dtype}")
+        elif isinstance(v, dict):
+            nonzero = {ik: int(iv) for ik, iv in v.items() if int(iv) != 0}
+            print(f"  {k}: {nonzero if nonzero else '{all zero}'}")
+        elif isinstance(v, np.ndarray):
+            print(f"  {k}: shape={v.shape} val={v}")
+        else:
+            print(f"  {k}: {v}")
+    print("=== END DUMP ===\n")
+
+
+def get_inventory_nonzero(obs):
+    if 'inventory' in obs and isinstance(obs['inventory'], dict):
+        return {k: int(v) for k, v in obs['inventory'].items() if int(v) != 0}
+    return None
+
+
 def main():
     global pygame
     import pygame as pg
@@ -84,10 +106,13 @@ def main():
     args = parser.parse_args()
 
     env = gym.make(args.env)
-    print(f"Environment: {args.env}")
+    print(f"=== Environment: {args.env} ===")
     print(f"Action space keys: {list(env.action_space.spaces.keys())}")
+    print(f"Observation space keys: {list(env.observation_space.spaces.keys())}")
 
     obs = env.reset()
+    dump_obs(obs, "RESET")
+
     pov = obs['pov']
     h, w = pov.shape[:2]
 
@@ -102,6 +127,10 @@ def main():
     done = False
     total_reward = 0.0
     step_count = 0
+    success = False
+    prev_inv = get_inventory_nonzero(obs)
+
+    print("Waiting for actions... (focus the pygame window)")
 
     while not done:
         camera_delta = [0.0, 0.0]
@@ -131,27 +160,44 @@ def main():
         total_reward += reward
         step_count += 1
 
+        cur_inv = get_inventory_nonzero(obs)
+        if cur_inv != prev_inv:
+            print(f"[Step {step_count}] INVENTORY CHANGED: {cur_inv}  reward={reward:.2f}")
+            prev_inv = cur_inv
+
         if reward != 0:
-            print(f"[Step {step_count}] reward={reward:.1f}  total={total_reward:.1f}")
+            print(f">>> [Step {step_count}] REWARD = {reward:.2f}  (total = {total_reward:.2f})")
+            if total_reward >= 1.0:
+                success = True
+                print("========== TASK COMPLETE! ==========")
+                done = True
 
         pov = obs['pov']
         surface = pygame.surfarray.make_surface(np.transpose(pov, (1, 0, 2)))
         surface = pygame.transform.scale(surface, (display_w, display_h))
         screen.blit(surface, (0, 0))
 
-        info_text = f"Step: {step_count}  Reward: {total_reward:.1f}"
         font = pygame.font.SysFont(None, 28)
-        text_surface = font.render(info_text, True, (255, 255, 0))
+        status = "PLAYING"
+        color = (255, 255, 0)
+        if success:
+            status = "SUCCESS!"
+            color = (0, 255, 0)
+        info_text = f"Step: {step_count}  Reward: {total_reward:.1f}  [{status}]"
+        text_surface = font.render(info_text, True, color)
         screen.blit(text_surface, (10, 10))
 
         pygame.display.flip()
         clock.tick(20)
 
-    print(f"\nEpisode finished at step {step_count}, total reward: {total_reward:.1f}")
-    if total_reward >= 1.0:
-        print("SUCCESS!")
+    print(f"\n{'='*40}")
+    print(f"Episode finished at step {step_count}")
+    print(f"Total reward: {total_reward:.2f}")
+    if success:
+        print("Result: SUCCESS")
     else:
-        print("FAILED (timeout or quit)")
+        print("Result: FAILED (timeout / quit)")
+    print(f"{'='*40}")
 
     env.close()
     pygame.quit()
