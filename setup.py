@@ -191,11 +191,12 @@ def prep_mcp():
         old_dir = os.getcwd()
         os.chdir(workdir)
     
-    # This may fail on the first try. Try few times
+    # --no-daemon 避免多进程争用同一 Gradle 缓存锁
+    gradle_args = [gradlew, '--no-daemon']
     n_trials = 3
     for i in range(n_trials):
         try:
-            subprocess.check_call('{} downloadAssets'.format(gradlew).split(' '), cwd=workdir)
+            subprocess.check_call(gradle_args + ['downloadAssets'], cwd=workdir)
         except subprocess.CalledProcessError as e:
             if i == n_trials - 1:
                 raise e
@@ -203,7 +204,7 @@ def prep_mcp():
             break
 
     unpack_assets()
-    subprocess.check_call('{} clean build shadowJar'.format(gradlew).split(' '), cwd=workdir)
+    subprocess.check_call(gradle_args + ['clean', 'build', 'shadowJar'], cwd=workdir)
     if os.name == 'nt':
         os.chdir(old_dir)
 
