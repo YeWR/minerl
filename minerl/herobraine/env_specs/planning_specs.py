@@ -3,6 +3,8 @@ Planning tasks for lifelong learning (MineRL 1.0.2 / MC 1.16).
 
 All tasks use Python-side wrappers for reward (Malmo XML broken in MC 1.16).
 
+# ============================================================
+# New tasks:
 Inventory-based tasks (4 envs each):
   - ChopTree:      collect 1 log (given axe)
   - MineStone:     collect 1 cobblestone (given pickaxe)
@@ -15,6 +17,7 @@ Position-based tasks (4 envs each):
 Animal tasks (AnimalPen only):
   - HuntForMeat:   kill animal, collect meat
   - ShearSheep:    shear sheep with shears, collect wool
+# ============================================================
 
 Environments (matching BASALT):
   - AnimalPen:           plains, spawn in village
@@ -27,6 +30,7 @@ from typing import List
 
 import gym
 import math
+
 import numpy as np
 
 from minerl.env import _fake, _singleagent
@@ -51,6 +55,9 @@ ALL_MEAT_TYPES = [
 BASE_TOOLS = [
     dict(type="iron_axe", quantity=1),
     dict(type="iron_pickaxe", quantity=1),
+    dict(type="iron_shovel", quantity=1),
+    dict(type="iron_sword", quantity=1),
+    dict(type="shears", quantity=1),
 ]
 
 ENVS = {
@@ -326,10 +333,7 @@ class HuntForMeat(InventoryTaskBase):
     GOAL_ITEMS = {m: 1 for m in ALL_MEAT_TYPES}
 
     def __init__(self, env_name, env_cfg):
-        super().__init__(
-            env_name, env_cfg, task_name='HuntForMeat',
-            inventory=[dict(type="iron_sword", quantity=1)],
-        )
+        super().__init__(env_name, env_cfg, task_name='HuntForMeat', inventory=BASE_TOOLS)
 
 
 class ShearSheep(InventoryTaskBase):
@@ -344,10 +348,7 @@ class ShearSheep(InventoryTaskBase):
     GOAL_ITEMS = {k: 1 for k in REWARD_ITEMS}
 
     def __init__(self, env_name, env_cfg):
-        super().__init__(
-            env_name, env_cfg, task_name='ShearSheep',
-            inventory=[dict(type="shears", quantity=1)],
-        )
+        super().__init__(env_name, env_cfg, task_name='ShearSheep', inventory=BASE_TOOLS)
 
 
 # ============================================================

@@ -103,6 +103,33 @@ class RandomInventoryAgentStart(InventoryAgentStart):
         return '\n'.join(lines)
 
 
+class RandomHotbarAgentStart(Handler):
+    """Agent start with 0-9 random item *types* in hotbar, each with random quantity."""
+    def __init__(self, item_pool: List[Dict[str, Union[str, int]]], num_types_range=(0, 9), quantity_range=(1, 64)):
+        """
+        item_pool: list of {"type": "dirt"} etc. (quantity in pool is ignored; randomized at runtime)
+        num_types_range: (min, max) inclusive, how many distinct item types to place (0-9).
+        quantity_range: (min, max) inclusive, random quantity per item.
+        """
+        self.item_pool = item_pool
+        self.num_types_range = num_types_range
+        self.quantity_range = quantity_range
+
+    def to_string(self) -> str:
+        return "random_hotbar_agent_start"
+
+    def xml_template(self) -> str:
+        n = random.randint(self.num_types_range[0], min(self.num_types_range[1], 9))
+        chosen = random.sample(self.item_pool, min(n, len(self.item_pool)))
+        lines = ['<Inventory>']
+        for slot, item in enumerate(chosen):
+            t = item.get("type", "dirt")
+            q = random.randint(self.quantity_range[0], self.quantity_range[1])
+            lines.append(f'<InventoryObject slot="{slot}" type="{t}" quantity="{q}"/>')
+        lines.append('</Inventory>')
+        return '\n'.join(lines)
+
+
 class AgentStartBreakSpeedMultiplier(Handler):
     def to_string(self) -> str:
         return f"agent_start_break_speed_multiplier({self.multiplier})"
