@@ -434,3 +434,49 @@ class RandomLandscapeRandomInitEnvSpec(BasaltBaseEnvSpec):
             handlers.PreferredSpawnBiome(lambda: random.choice(RANDOM_LANDSCAPE_BIOMES)),
             handlers.DoneOnDeath(),
         ]
+
+
+RANDOM_ENV_ITEM_POOL = [
+    dict(type="dirt"),
+    dict(type="cobblestone"),
+    dict(type="oak_log"),
+    dict(type="oak_planks"),
+    dict(type="torch"),
+    dict(type="stone_pickaxe"),
+    dict(type="stone_axe"),
+    dict(type="stone_shovel"),
+    dict(type="grass_block"),
+    dict(type="sand"),
+    dict(type="oak_sapling"),
+    dict(type="stick"),
+    dict(type="crafting_table"),
+    dict(type="glass_pane"),
+    dict(type="wheat_seeds"),
+    dict(type="bucket"),
+    dict(type="water_bucket"),
+    dict(type="shears"),
+]
+
+
+class RandomEnvEnvSpec(BasaltBaseEnvSpec):
+    """随机生物群系世界 + 九个快捷栏位按槽随机是否放物品及数量，供 random_env_explore 采集。"""
+
+    def __init__(self):
+        super().__init__(
+            name="MineRLRandomEnv-v0",
+            demo_server_experiment_name="random_env",
+            max_episode_steps=6 * MINUTE,
+            preferred_spawn_biome="plains",
+            inventory=[],
+        )
+
+    def create_agent_start(self) -> List[handlers.Handler]:
+        return HumanControlEnvSpec.create_agent_start(self) + [
+            handlers.RandomHotbarPerSlotAgentStart(
+                RANDOM_ENV_ITEM_POOL,
+                slot_occupancy_prob_range=(0.35, 0.85),
+                quantity_range=(1, 64),
+            ),
+            handlers.PreferredSpawnBiome(lambda: random.choice(RANDOM_LANDSCAPE_BIOMES)),
+            handlers.DoneOnDeath(),
+        ]

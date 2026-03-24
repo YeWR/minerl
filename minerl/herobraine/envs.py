@@ -35,6 +35,7 @@ MINERL_BASALT_MAKE_WATERFALL_ENV_SPEC = basalt_specs.MakeWaterfallEnvSpec()
 MINERL_BASALT_PEN_ANIMALS_VILLAGE_ENV_SPEC = basalt_specs.PenAnimalsVillageEnvSpec()
 MINERL_BASALT_VILLAGE_HOUSE_ENV_SPEC = basalt_specs.VillageMakeHouseEnvSpec()
 MINERL_RANDOM_LANDSCAPE_INIT_ENV_SPEC = basalt_specs.RandomLandscapeRandomInitEnvSpec()
+MINERL_RANDOM_ENV_SPEC = basalt_specs.RandomEnvEnvSpec()
 
 MINERL_PLANNING_ENVS = make_all_planning_envs()
 

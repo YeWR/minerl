@@ -248,6 +248,8 @@ class InventoryTaskBase(BasaltBaseEnvSpec):
         items = sorted(set(self.REWARD_ITEMS.keys()) | set(self.GOAL_ITEMS.keys()))
         if items:
             obs.append(handlers.FlatInventoryObservation(items))
+        obs.append(handlers.ObservationFromCurrentLocation())
+        obs.append(handlers.ObservationFromLifeStats())
         return obs
 
     def create_agent_start(self) -> List[Handler]:
@@ -290,6 +292,7 @@ class PositionTaskBase(BasaltBaseEnvSpec):
     def create_observables(self) -> List[Handler]:
         obs = super().create_observables()
         obs.append(handlers.ObservationFromCurrentLocation())
+        obs.append(handlers.ObservationFromLifeStats())
         return obs
 
     def create_agent_start(self) -> List[Handler]:
