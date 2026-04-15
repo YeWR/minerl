@@ -6,24 +6,21 @@ All tasks use Python-side wrappers for reward (Malmo XML broken in MC 1.16).
 # ============================================================
 # New tasks:
 Inventory-based tasks (4 envs each):
-  - ChopTree:      collect 1 log (given axe)
-  - MineStone:     collect 1 cobblestone (given pickaxe)
+  - ChopTree:      collect 1 log; 四个环境分别继承 BASALT FindCave / MakeWaterfall /
+                   CreateVillageAnimalPen / BuildVillageHouse（仅叠加 Python 侧 inventory reward；
+                   Cave / Waterfall / AnimalPen 在 BASALT 原初始物品基础上加一把 iron_axe）
+  - MineStone:     collect 1 cobblestone（同上四 BASALT；iron_pickaxe + iron_shovel 各 1，与 ChopTree 配铁斧对称；
+                   Cave/AnimalPen 在原生上加；Waterfall 用铁镐铁铲替换原 stone 镐铲；Village 在建材背包上加铁铲）
+  - JourneyToTheDeep / SkywardAscent / Nomad: 位置奖励，世界与背包同四 BASALT；开局前置 iron 斧镐铲剑各 1（NAV_TOOL_START），
+                   便于挖/砍/探；Waterfall 底图去掉 stone 镐铲以免与铁具重复；Nomad 四环境 max_episode_steps=10min（与原规划一致）
 
-Position-based tasks (4 envs each):
-  - JourneyToTheDeep:  descend 10 blocks below spawn Y
-  - SkywardAscent:     climb 10 blocks above spawn Y
-  - Nomad:             travel 500 blocks (xz) from spawn
-
-Animal tasks (AnimalPen only):
-  - HuntForMeat:   kill animal, collect meat
-  - ShearSheep:    shear sheep with shears, collect wool
+Animal tasks（仅 PenAnimals BASALT）:
+  - HuntForMeat:   原生 Pen 物品 + iron_sword
+  - ShearSheep:    原生 Pen 物品 + shears
 # ============================================================
 
-Environments (matching BASALT):
-  - AnimalPen:           plains, spawn in village
-  - CaveHills:           plains
-  - VillagePlains:       plains, spawn in village
-  - WaterfallMountains:  extreme hills
+Landscape 别名（CaveHills / WaterfallMountains / AnimalPen / VillagePlains）与 gym id 后缀不变，
+底层 demo_server_experiment_name 已与 BASALT findcaves / waterfall / village_pen_animals / village_make_house 对齐。
 """
 
 from typing import List
@@ -31,13 +28,16 @@ from typing import List
 import gym
 import math
 
-import numpy as np
-
 from minerl.env import _fake, _singleagent
 from minerl.herobraine.hero import handlers
 from minerl.herobraine.hero.handler import Handler
 from minerl.herobraine.env_specs.basalt_specs import (
-    BasaltBaseEnvSpec, BasaltTimeoutWrapper, DoneOnESCWrapper,
+    BasaltTimeoutWrapper,
+    DoneOnESCWrapper,
+    FindCaveEnvSpec,
+    MakeWaterfallEnvSpec,
+    PenAnimalsVillageEnvSpec,
+    VillageMakeHouseEnvSpec,
 )
 
 
@@ -52,38 +52,44 @@ ALL_MEAT_TYPES = [
     'cooked_mutton', 'cooked_rabbit',
 ]
 
-BASE_TOOLS = [
+MINUTE = 20 * 60
+DEFAULT_MAX_STEPS = 1 * MINUTE  # 1 minute per episode (except Nomad)
+
+# Unified toolkit for ALL tasks and environments.
+# Slots 1-7 are identical regardless of task, so the only difference
+# between environments is terrain/visuals (what the WM should learn).
+UNIVERSAL_INVENTORY = [
+    dict(type="iron_pickaxe", quantity=1),   # slot 1: mine stone
+    dict(type="iron_axe", quantity=1),        # slot 2: chop trees
+    dict(type="iron_shovel", quantity=1),     # slot 3: dig dirt
+    dict(type="iron_sword", quantity=1),      # slot 4: combat
+    dict(type="shears", quantity=1),          # slot 5: shear sheep
+    dict(type="cobblestone", quantity=64),    # slot 6: building/pillar
+    dict(type="torch", quantity=64),          # slot 7: lighting
+]
+
+# Keep old names for backwards compat in case anything references them
+CHOP_AXE = [dict(type="iron_axe", quantity=1)]
+MINE_PICK = [dict(type="iron_pickaxe", quantity=1)]
+MINE_SHOVEL = [dict(type="iron_shovel", quantity=1)]
+MINE_TOOL_START = list(MINE_PICK) + list(MINE_SHOVEL)
+HUNT_SWORD = [dict(type="iron_sword", quantity=1)]
+SHEARS_EXTRA = [dict(type="shears", quantity=1)]
+NAV_TOOL_START = [
     dict(type="iron_axe", quantity=1),
     dict(type="iron_pickaxe", quantity=1),
     dict(type="iron_shovel", quantity=1),
     dict(type="iron_sword", quantity=1),
-    dict(type="shears", quantity=1),
 ]
 
-ENVS = {
-    'AnimalPen': {
-        'demo_server_experiment_name': 'plan_animal_pen',
-        'preferred_spawn_biome': 'plains',
-        'spawn_in_village': True,
-    },
-    'CaveHills': {
-        'demo_server_experiment_name': 'plan_cave_hills',
-        'preferred_spawn_biome': 'plains',
-        'spawn_in_village': False,
-    },
-    'VillagePlains': {
-        'demo_server_experiment_name': 'plan_village_plains',
-        'preferred_spawn_biome': 'plains',
-        'spawn_in_village': True,
-    },
-    'WaterfallMountains': {
-        'demo_server_experiment_name': 'plan_waterfall_mountains',
-        'preferred_spawn_biome': 'extreme_hills',
-        'spawn_in_village': False,
-    },
+SHEAR_WOOL_ITEMS = {
+    'white_wool': 1.0, 'orange_wool': 1.0, 'magenta_wool': 1.0,
+    'light_blue_wool': 1.0, 'yellow_wool': 1.0, 'lime_wool': 1.0,
+    'pink_wool': 1.0, 'gray_wool': 1.0, 'light_gray_wool': 1.0,
+    'cyan_wool': 1.0, 'purple_wool': 1.0, 'blue_wool': 1.0,
+    'brown_wool': 1.0, 'green_wool': 1.0, 'red_wool': 1.0,
+    'black_wool': 1.0,
 }
-
-MINUTE = 20 * 60
 
 
 # ============================================================
@@ -219,26 +225,11 @@ def _pos_entrypoint(env_spec, fake=False):
 
 
 # ============================================================
-# Base classes
+# Planning mixins + BASALT-backed task specs
 # ============================================================
 
-class InventoryTaskBase(BasaltBaseEnvSpec):
-    """Base for inventory-based tasks."""
-
-    REWARD_ITEMS = {}
-    GOAL_ITEMS = {}
-
-    def __init__(self, env_name, env_cfg, task_name,
-                 max_episode_steps=3 * MINUTE, inventory=(), **kwargs):
-        self.env_cfg = env_cfg
-        self._spawn_in_village = env_cfg['spawn_in_village']
-        super().__init__(
-            name='MineRLPlan{}{}-v0'.format(task_name, env_name),
-            demo_server_experiment_name=env_cfg['demo_server_experiment_name'],
-            max_episode_steps=max_episode_steps,
-            preferred_spawn_biome=env_cfg['preferred_spawn_biome'],
-            inventory=inventory,
-        )
+class _InventoryPlanningMixin:
+    """BASALT 世界不变，叠加规划 entrypoint 与 inventory 稀疏奖励观测。"""
 
     def _entry_point(self, fake: bool) -> str:
         return PLANNING_INV_ENTRY
@@ -248,15 +239,10 @@ class InventoryTaskBase(BasaltBaseEnvSpec):
         items = sorted(set(self.REWARD_ITEMS.keys()) | set(self.GOAL_ITEMS.keys()))
         if items:
             obs.append(handlers.FlatInventoryObservation(items))
+        obs.append(handlers.HotbarObservation())
         obs.append(handlers.ObservationFromCurrentLocation())
         obs.append(handlers.ObservationFromLifeStats())
         return obs
-
-    def create_agent_start(self) -> List[Handler]:
-        start = super().create_agent_start()
-        if self._spawn_in_village:
-            start.append(handlers.SpawnInVillage())
-        return start
 
     def create_rewardables(self):
         return []
@@ -268,38 +254,39 @@ class InventoryTaskBase(BasaltBaseEnvSpec):
         return sum(rewards) >= 1.0
 
 
-class PositionTaskBase(BasaltBaseEnvSpec):
-    """Base for position-based tasks."""
+class _ChopTreePlanningMixin(_InventoryPlanningMixin):
+    REWARD_ITEMS = {log: 1.0 for log in ALL_LOG_TYPES}
+    GOAL_ITEMS = {log: 1 for log in ALL_LOG_TYPES}
 
+
+class _MineStonePlanningMixin(_InventoryPlanningMixin):
+    REWARD_ITEMS = {'cobblestone': 1.0}
+    GOAL_ITEMS = {'cobblestone': 1}
+
+
+class _HuntForMeatPlanningMixin(_InventoryPlanningMixin):
+    REWARD_ITEMS = {m: 1.0 for m in ALL_MEAT_TYPES}
+    GOAL_ITEMS = {m: 1 for m in ALL_MEAT_TYPES}
+
+
+class _ShearSheepPlanningMixin(_InventoryPlanningMixin):
+    REWARD_ITEMS = SHEAR_WOOL_ITEMS
+    GOAL_ITEMS = {k: 1 for k in SHEAR_WOOL_ITEMS}
+
+
+class _PositionPlanningMixin:
     POS_MODE = 'y_below'
     POS_THRESHOLD = 10
-
-    def __init__(self, env_name, env_cfg, task_name,
-                 max_episode_steps=5 * MINUTE, inventory=(), **kwargs):
-        self.env_cfg = env_cfg
-        self._spawn_in_village = env_cfg['spawn_in_village']
-        super().__init__(
-            name='MineRLPlan{}{}-v0'.format(task_name, env_name),
-            demo_server_experiment_name=env_cfg['demo_server_experiment_name'],
-            max_episode_steps=max_episode_steps,
-            preferred_spawn_biome=env_cfg['preferred_spawn_biome'],
-            inventory=inventory,
-        )
 
     def _entry_point(self, fake: bool) -> str:
         return PLANNING_POS_ENTRY
 
     def create_observables(self) -> List[Handler]:
         obs = super().create_observables()
+        obs.append(handlers.HotbarObservation())
         obs.append(handlers.ObservationFromCurrentLocation())
         obs.append(handlers.ObservationFromLifeStats())
         return obs
-
-    def create_agent_start(self) -> List[Handler]:
-        start = super().create_agent_start()
-        if self._spawn_in_village:
-            start.append(handlers.SpawnInVillage())
-        return start
 
     def create_rewardables(self):
         return []
@@ -311,100 +298,284 @@ class PositionTaskBase(BasaltBaseEnvSpec):
         return sum(rewards) >= 1.0
 
 
-# ============================================================
-# Inventory tasks
-# ============================================================
-
-class ChopTree(InventoryTaskBase):
-    REWARD_ITEMS = {log: 1.0 for log in ALL_LOG_TYPES}
-    GOAL_ITEMS = {log: 1 for log in ALL_LOG_TYPES}
-
-    def __init__(self, env_name, env_cfg):
-        super().__init__(env_name, env_cfg, task_name='ChopTree', inventory=BASE_TOOLS)
-
-
-class MineStone(InventoryTaskBase):
-    REWARD_ITEMS = {'cobblestone': 1.0}
-    GOAL_ITEMS = {'cobblestone': 1}
-
-    def __init__(self, env_name, env_cfg):
-        super().__init__(env_name, env_cfg, task_name='MineStone', inventory=BASE_TOOLS)
-
-
-class HuntForMeat(InventoryTaskBase):
-    REWARD_ITEMS = {m: 1.0 for m in ALL_MEAT_TYPES}
-    GOAL_ITEMS = {m: 1 for m in ALL_MEAT_TYPES}
-
-    def __init__(self, env_name, env_cfg):
-        super().__init__(env_name, env_cfg, task_name='HuntForMeat', inventory=BASE_TOOLS)
-
-
-class ShearSheep(InventoryTaskBase):
-    REWARD_ITEMS = {
-        'white_wool': 1.0, 'orange_wool': 1.0, 'magenta_wool': 1.0,
-        'light_blue_wool': 1.0, 'yellow_wool': 1.0, 'lime_wool': 1.0,
-        'pink_wool': 1.0, 'gray_wool': 1.0, 'light_gray_wool': 1.0,
-        'cyan_wool': 1.0, 'purple_wool': 1.0, 'blue_wool': 1.0,
-        'brown_wool': 1.0, 'green_wool': 1.0, 'red_wool': 1.0,
-        'black_wool': 1.0,
-    }
-    GOAL_ITEMS = {k: 1 for k in REWARD_ITEMS}
-
-    def __init__(self, env_name, env_cfg):
-        super().__init__(env_name, env_cfg, task_name='ShearSheep', inventory=BASE_TOOLS)
-
-
-# ============================================================
-# Position tasks
-# ============================================================
-
-class JourneyToTheDeep(PositionTaskBase):
+class _JourneyPlanningMixin(_PositionPlanningMixin):
     POS_MODE = 'y_below'
     POS_THRESHOLD = 10
 
-    def __init__(self, env_name, env_cfg):
-        super().__init__(
-            env_name, env_cfg, task_name='JourneyToTheDeep',
-            inventory=BASE_TOOLS,
-        )
 
-
-class SkywardAscent(PositionTaskBase):
+class _SkywardPlanningMixin(_PositionPlanningMixin):
     POS_MODE = 'y_above'
     POS_THRESHOLD = 10
 
-    def __init__(self, env_name, env_cfg):
-        super().__init__(
-            env_name, env_cfg, task_name='SkywardAscent',
-            inventory=BASE_TOOLS,
-        )
 
-
-class Nomad(PositionTaskBase):
+class _NomadPlanningMixin(_PositionPlanningMixin):
     POS_MODE = 'xz_dist'
-    POS_THRESHOLD = 500
+    POS_THRESHOLD = 100
 
-    def __init__(self, env_name, env_cfg):
-        super().__init__(
-            env_name, env_cfg, task_name='Nomad',
-            max_episode_steps=10 * MINUTE,
-            inventory=BASE_TOOLS,
-        )
+
+# --- ChopTree ---
+
+class ChopTreeCaveHills(_ChopTreePlanningMixin, FindCaveEnvSpec):
+    def __init__(self):
+        FindCaveEnvSpec.__init__(self)
+        self.name = 'MineRLPlanChopTreeCaveHills-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class ChopTreeWaterfallMountains(_ChopTreePlanningMixin, MakeWaterfallEnvSpec):
+    def __init__(self):
+        MakeWaterfallEnvSpec.__init__(self)
+        self.name = 'MineRLPlanChopTreeWaterfallMountains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class ChopTreeAnimalPen(_ChopTreePlanningMixin, PenAnimalsVillageEnvSpec):
+    def __init__(self):
+        PenAnimalsVillageEnvSpec.__init__(self)
+        self.name = 'MineRLPlanChopTreeAnimalPen-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class ChopTreeVillagePlains(_ChopTreePlanningMixin, VillageMakeHouseEnvSpec):
+    def __init__(self):
+        VillageMakeHouseEnvSpec.__init__(self)
+        self.name = 'MineRLPlanChopTreeVillagePlains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+CHOP_TREE_ENV_SPECS = (
+    ChopTreeCaveHills,
+    ChopTreeWaterfallMountains,
+    ChopTreeAnimalPen,
+    ChopTreeVillagePlains,
+)
+
+
+# --- MineStone ---
+
+class MineStoneCaveHills(_MineStonePlanningMixin, FindCaveEnvSpec):
+    def __init__(self):
+        FindCaveEnvSpec.__init__(self)
+        self.name = 'MineRLPlanMineStoneCaveHills-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class MineStoneWaterfallMountains(_MineStonePlanningMixin, MakeWaterfallEnvSpec):
+    def __init__(self):
+        MakeWaterfallEnvSpec.__init__(self)
+        self.name = 'MineRLPlanMineStoneWaterfallMountains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class MineStoneAnimalPen(_MineStonePlanningMixin, PenAnimalsVillageEnvSpec):
+    def __init__(self):
+        PenAnimalsVillageEnvSpec.__init__(self)
+        self.name = 'MineRLPlanMineStoneAnimalPen-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class MineStoneVillagePlains(_MineStonePlanningMixin, VillageMakeHouseEnvSpec):
+    def __init__(self):
+        VillageMakeHouseEnvSpec.__init__(self)
+        self.name = 'MineRLPlanMineStoneVillagePlains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+MINE_STONE_ENV_SPECS = (
+    MineStoneCaveHills,
+    MineStoneWaterfallMountains,
+    MineStoneAnimalPen,
+    MineStoneVillagePlains,
+)
+
+
+# --- JourneyToTheDeep ---
+
+class JourneyToTheDeepCaveHills(_JourneyPlanningMixin, FindCaveEnvSpec):
+    def __init__(self):
+        FindCaveEnvSpec.__init__(self)
+        self.name = 'MineRLPlanJourneyToTheDeepCaveHills-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class JourneyToTheDeepWaterfallMountains(_JourneyPlanningMixin, MakeWaterfallEnvSpec):
+    def __init__(self):
+        MakeWaterfallEnvSpec.__init__(self)
+        self.name = 'MineRLPlanJourneyToTheDeepWaterfallMountains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class JourneyToTheDeepAnimalPen(_JourneyPlanningMixin, PenAnimalsVillageEnvSpec):
+    def __init__(self):
+        PenAnimalsVillageEnvSpec.__init__(self)
+        self.name = 'MineRLPlanJourneyToTheDeepAnimalPen-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class JourneyToTheDeepVillagePlains(_JourneyPlanningMixin, VillageMakeHouseEnvSpec):
+    def __init__(self):
+        VillageMakeHouseEnvSpec.__init__(self)
+        self.name = 'MineRLPlanJourneyToTheDeepVillagePlains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+JOURNEY_DEEP_ENV_SPECS = (
+    JourneyToTheDeepCaveHills,
+    JourneyToTheDeepWaterfallMountains,
+    JourneyToTheDeepAnimalPen,
+    JourneyToTheDeepVillagePlains,
+)
+
+
+# --- SkywardAscent ---
+
+class SkywardAscentCaveHills(_SkywardPlanningMixin, FindCaveEnvSpec):
+    def __init__(self):
+        FindCaveEnvSpec.__init__(self)
+        self.name = 'MineRLPlanSkywardAscentCaveHills-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class SkywardAscentWaterfallMountains(_SkywardPlanningMixin, MakeWaterfallEnvSpec):
+    def __init__(self):
+        MakeWaterfallEnvSpec.__init__(self)
+        self.name = 'MineRLPlanSkywardAscentWaterfallMountains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class SkywardAscentAnimalPen(_SkywardPlanningMixin, PenAnimalsVillageEnvSpec):
+    def __init__(self):
+        PenAnimalsVillageEnvSpec.__init__(self)
+        self.name = 'MineRLPlanSkywardAscentAnimalPen-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class SkywardAscentVillagePlains(_SkywardPlanningMixin, VillageMakeHouseEnvSpec):
+    def __init__(self):
+        VillageMakeHouseEnvSpec.__init__(self)
+        self.name = 'MineRLPlanSkywardAscentVillagePlains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+SKYWARD_ASCENT_ENV_SPECS = (
+    SkywardAscentCaveHills,
+    SkywardAscentWaterfallMountains,
+    SkywardAscentAnimalPen,
+    SkywardAscentVillagePlains,
+)
+
+
+# --- Nomad (10 min timeout) ---
+
+class NomadCaveHills(_NomadPlanningMixin, FindCaveEnvSpec):
+    def __init__(self):
+        FindCaveEnvSpec.__init__(self)
+        self.name = 'MineRLPlanNomadCaveHills-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class NomadWaterfallMountains(_NomadPlanningMixin, MakeWaterfallEnvSpec):
+    def __init__(self):
+        MakeWaterfallEnvSpec.__init__(self)
+        self.name = 'MineRLPlanNomadWaterfallMountains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class NomadAnimalPen(_NomadPlanningMixin, PenAnimalsVillageEnvSpec):
+    def __init__(self):
+        PenAnimalsVillageEnvSpec.__init__(self)
+        self.name = 'MineRLPlanNomadAnimalPen-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class NomadVillagePlains(_NomadPlanningMixin, VillageMakeHouseEnvSpec):
+    def __init__(self):
+        VillageMakeHouseEnvSpec.__init__(self)
+        self.name = 'MineRLPlanNomadVillagePlains-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+NOMAD_ENV_SPECS = (
+    NomadCaveHills,
+    NomadWaterfallMountains,
+    NomadAnimalPen,
+    NomadVillagePlains,
+)
+
+
+# --- AnimalPen-only inventory tasks ---
+
+class HuntForMeatAnimalPen(_HuntForMeatPlanningMixin, PenAnimalsVillageEnvSpec):
+    def __init__(self):
+        PenAnimalsVillageEnvSpec.__init__(self)
+        self.name = 'MineRLPlanHuntForMeatAnimalPen-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+
+
+class ShearSheepAnimalPen(_ShearSheepPlanningMixin, PenAnimalsVillageEnvSpec):
+    def __init__(self):
+        PenAnimalsVillageEnvSpec.__init__(self)
+        self.name = 'MineRLPlanShearSheepAnimalPen-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
 
 
 # ============================================================
 # Registry
 # ============================================================
 
-ALL_ENV_TASKS = [ChopTree, MineStone, JourneyToTheDeep, SkywardAscent, Nomad]
-ANIMAL_ENV_TASKS = [HuntForMeat, ShearSheep]
+ALL_PLANNING_ENV_SPEC_CLASSES = (
+    CHOP_TREE_ENV_SPECS
+    + MINE_STONE_ENV_SPECS
+    + JOURNEY_DEEP_ENV_SPECS
+    + SKYWARD_ASCENT_ENV_SPECS
+    + NOMAD_ENV_SPECS
+    + (HuntForMeatAnimalPen, ShearSheepAnimalPen)
+)
 
 
 def make_all_planning_envs():
-    envs = []
-    for task_cls in ALL_ENV_TASKS:
-        for env_name, env_cfg in ENVS.items():
-            envs.append(task_cls(env_name=env_name, env_cfg=env_cfg))
-    for task_cls in ANIMAL_ENV_TASKS:
-        envs.append(task_cls(env_name='AnimalPen', env_cfg=ENVS['AnimalPen']))
-    return envs
+    return [cls() for cls in ALL_PLANNING_ENV_SPEC_CLASSES]

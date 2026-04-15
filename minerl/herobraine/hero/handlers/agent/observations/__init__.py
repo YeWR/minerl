@@ -10,3 +10,5 @@ from .inventory import *
 from .lifestats import *
 from .pov import *
 from .is_gui_open import *
+from .nearby_grid import *
+from .hotbar import *
