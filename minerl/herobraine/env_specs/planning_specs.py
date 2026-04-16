@@ -6,21 +6,23 @@ All tasks use Python-side wrappers for reward (Malmo XML broken in MC 1.16).
 # ============================================================
 # New tasks:
 Inventory-based tasks (4 envs each):
-  - ChopTree:      collect 1 log; 四个环境分别继承 BASALT FindCave / MakeWaterfall /
-                   CreateVillageAnimalPen / BuildVillageHouse（仅叠加 Python 侧 inventory reward；
-                   Cave / Waterfall / AnimalPen 在 BASALT 原初始物品基础上加一把 iron_axe）
-  - MineStone:     collect 1 cobblestone（同上四 BASALT；iron_pickaxe + iron_shovel 各 1，与 ChopTree 配铁斧对称；
-                   Cave/AnimalPen 在原生上加；Waterfall 用铁镐铁铲替换原 stone 镐铲；Village 在建材背包上加铁铲）
-  - JourneyToTheDeep / SkywardAscent / Nomad: 位置奖励，世界与背包同四 BASALT；开局前置 iron 斧镐铲剑各 1（NAV_TOOL_START），
-                   便于挖/砍/探；Waterfall 底图去掉 stone 镐铲以免与铁具重复；Nomad 四环境 max_episode_steps=10min（与原规划一致）
+  - ChopTree:      collect 1 log; four landscapes inherit BASALT FindCave / MakeWaterfall /
+                   CreateVillageAnimalPen / BuildVillageHouse (Python-side inventory reward only;
+                   Cave / Waterfall / AnimalPen add one iron_axe on top of the BASALT starter loadout).
+  - MineStone:     collect 1 cobblestone (same four BASALT bases; iron_pickaxe + iron_shovel, mirroring ChopTree’s axe;
+                   Cave/AnimalPen add on native loadout; Waterfall swaps in iron pick/shovel for stone ones;
+                   Village adds iron shovel on the house-building kit).
+  - JourneyToTheDeep / SkywardAscent / Nomad: position-based reward; same four BASALT worlds and backpacks;
+                   start with NAV_TOOL_START (iron axe/pick/shovel/sword) for dig/chop/explore;
+                   Waterfall removes duplicate stone tools; Nomad uses max_episode_steps=10 minutes (original plan).
 
-Animal tasks（仅 PenAnimals BASALT）:
-  - HuntForMeat:   原生 Pen 物品 + iron_sword
-  - ShearSheep:    原生 Pen 物品 + shears
+Animal tasks (PenAnimals BASALT only):
+  - HuntForMeat:   native Pen inventory + iron_sword
+  - ShearSheep:    native Pen inventory + shears
 # ============================================================
 
-Landscape 别名（CaveHills / WaterfallMountains / AnimalPen / VillagePlains）与 gym id 后缀不变，
-底层 demo_server_experiment_name 已与 BASALT findcaves / waterfall / village_pen_animals / village_make_house 对齐。
+Landscape aliases (CaveHills / WaterfallMountains / AnimalPen / VillagePlains) and gym id suffixes are unchanged;
+``demo_server_experiment_name`` matches BASALT findcaves / waterfall / village_pen_animals / village_make_house.
 """
 
 from typing import List
@@ -31,6 +33,7 @@ import math
 from minerl.env import _fake, _singleagent
 from minerl.herobraine.hero import handlers
 from minerl.herobraine.hero.handler import Handler
+from minerl.herobraine.hero.handlers.agent.observations.inventory import FlatInventoryObservation
 from minerl.herobraine.env_specs.basalt_specs import (
     BasaltTimeoutWrapper,
     DoneOnESCWrapper,
@@ -89,6 +92,8 @@ SHEAR_WOOL_ITEMS = {
     'cyan_wool': 1.0, 'purple_wool': 1.0, 'blue_wool': 1.0,
     'brown_wool': 1.0, 'green_wool': 1.0, 'red_wool': 1.0,
     'black_wool': 1.0,
+    # Some Malmo / legacy stacks report plain ``wool``
+    'wool': 1.0,
 }
 
 
@@ -229,7 +234,7 @@ def _pos_entrypoint(env_spec, fake=False):
 # ============================================================
 
 class _InventoryPlanningMixin:
-    """BASALT 世界不变，叠加规划 entrypoint 与 inventory 稀疏奖励观测。"""
+    """BASALT world unchanged; add planning entrypoint plus sparse inventory reward observations."""
 
     def _entry_point(self, fake: bool) -> str:
         return PLANNING_INV_ENTRY
@@ -255,8 +260,9 @@ class _InventoryPlanningMixin:
 
 
 class _ChopTreePlanningMixin(_InventoryPlanningMixin):
-    REWARD_ITEMS = {log: 1.0 for log in ALL_LOG_TYPES}
-    GOAL_ITEMS = {log: 1 for log in ALL_LOG_TYPES}
+    # Include legacy key "log" (inventory.py maps log2->log); some builds only report "log".
+    REWARD_ITEMS = {**{log: 1.0 for log in ALL_LOG_TYPES}, "log": 1.0}
+    GOAL_ITEMS = {**{log: 1 for log in ALL_LOG_TYPES}, "log": 1}
 
 
 class _MineStonePlanningMixin(_InventoryPlanningMixin):
@@ -272,6 +278,33 @@ class _HuntForMeatPlanningMixin(_InventoryPlanningMixin):
 class _ShearSheepPlanningMixin(_InventoryPlanningMixin):
     REWARD_ITEMS = SHEAR_WOOL_ITEMS
     GOAL_ITEMS = {k: 1 for k in SHEAR_WOOL_ITEMS}
+    # Pen starter + UNIVERSAL tools: if omitted from FlatInventory, the in-game bag changes on pickup
+    # but ``obs['inventory']`` would lack those keys.
+    _SHEAR_OBS_EXTRA = frozenset({
+        'oak_fence', 'oak_fence_gate', 'carrot', 'wheat_seeds', 'wheat',
+        'iron_pickaxe', 'iron_axe', 'iron_shovel', 'iron_sword',
+        'shears', 'cobblestone', 'torch',
+    })
+
+    def create_observables(self) -> List[Handler]:
+        obs = super().create_observables()
+        out: List[Handler] = []
+        replaced = False
+        for h in obs:
+            if isinstance(h, FlatInventoryObservation):
+                if not replaced:
+                    items = sorted(
+                        set(self.REWARD_ITEMS.keys())
+                        | set(self.GOAL_ITEMS.keys())
+                        | self._SHEAR_OBS_EXTRA
+                    )
+                    out.append(FlatInventoryObservation(items))
+                    replaced = True
+                continue
+            out.append(h)
+        if not replaced:
+            return obs
+        return out
 
 
 class _PositionPlanningMixin:

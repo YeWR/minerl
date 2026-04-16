@@ -50,6 +50,8 @@ class FlatInventoryObservation(TranslationHandler):
         for stack in info['inventory']:
             if 'type' in stack and 'quantity' in stack:
                 type_name = stack['type']
+                if isinstance(type_name, str):
+                    type_name = mc.strip_item_prefix(type_name)
                 if type_name == 'log2':
                     type_name = 'log'
 
