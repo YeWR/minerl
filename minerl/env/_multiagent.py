@@ -264,7 +264,7 @@ class _MultiAgentEnv(gym.Env):
             if h.to_string() in action_in:
                 action_str.append(h.to_hero(action_in[h.to_string()]))
 
-        return "\n".join(action_str)
+        return "\n".join([a for a in action_str if a])   # skip empty commands (e.g. idle chat action)
 
     def _check_action(self, actor_name, action, env_spec):
         # TODO (R): Move this to env_spec in some reasonable way.

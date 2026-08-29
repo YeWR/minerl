@@ -102,7 +102,10 @@ class InstanceManager:
 
     DEFAULT_IP = "localhost"
     _instance_pool = []
-    _malmo_base_port = 9000
+    # Base port is per-process configurable via MINERL_MALMO_BASE_PORT so that several jobs
+    # sharing one node don't fight over the same 9000+ range (observed: co-located jobs all
+    # fail with Malmo timeouts while solo jobs succeed).
+    _malmo_base_port = int(os.environ.get("MINERL_MALMO_BASE_PORT", 9000))
     ninstances = 0
     X11_DIR = '/tmp/.X11-unix'
     headless = False

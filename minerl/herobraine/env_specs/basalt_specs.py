@@ -1,7 +1,6 @@
 from typing import List, Optional, Sequence
 
 import gym
-import random
 
 from minerl.env import _fake, _singleagent
 from minerl.herobraine import wrappers
@@ -395,88 +394,4 @@ Finally, end the episode by setting the "ESC" action to 1.
     def create_agent_start(self) -> List[handlers.Handler]:
         return super().create_agent_start() + [
             handlers.SpawnInVillage()
-        ]
-
-
-RANDOM_LANDSCAPE_BIOMES = ["plains", "extreme_hills", "forest", "desert", "swamp", "taiga"]
-RANDOM_HOTBAR_ITEM_POOL = [
-    dict(type="dirt"),
-    dict(type="cobblestone"),
-    dict(type="oak_log"),
-    dict(type="oak_planks"),
-    dict(type="torch"),
-    dict(type="stone_pickaxe"),
-    dict(type="stone_axe"),
-    dict(type="stone_shovel"),
-    dict(type="grass_block"),
-]
-
-
-class RandomLandscapeRandomInitEnvSpec(BasaltBaseEnvSpec):
-    """随机地形 + 随机 0-9 种物品（每种随机数量）在 hotbar，仅用于采集 random behavior 数据。"""
-
-    def __init__(self):
-        super().__init__(
-            name="MineRLRandomLandscapeRandomInit-v0",
-            demo_server_experiment_name="random_landscape_init",
-            max_episode_steps=6 * MINUTE,
-            preferred_spawn_biome="plains",
-            inventory=[],
-        )
-
-    def create_agent_start(self) -> List[handlers.Handler]:
-        return HumanControlEnvSpec.create_agent_start(self) + [
-            handlers.RandomHotbarAgentStart(
-                RANDOM_HOTBAR_ITEM_POOL,
-                num_types_range=(0, 9),
-                quantity_range=(1, 64),
-            ),
-            handlers.PreferredSpawnBiome(lambda: random.choice(RANDOM_LANDSCAPE_BIOMES)),
-            handlers.DoneOnDeath(),
-        ]
-
-
-RANDOM_ENV_ITEM_POOL = [
-    dict(type="dirt"),
-    dict(type="cobblestone"),
-    dict(type="oak_log"),
-    dict(type="oak_planks"),
-    dict(type="torch"),
-    dict(type="stone_pickaxe"),
-    dict(type="stone_axe"),
-    dict(type="stone_shovel"),
-    dict(type="grass_block"),
-    dict(type="sand"),
-    dict(type="oak_sapling"),
-    dict(type="stick"),
-    dict(type="crafting_table"),
-    dict(type="glass_pane"),
-    dict(type="wheat_seeds"),
-    dict(type="bucket"),
-    dict(type="water_bucket"),
-    dict(type="shears"),
-]
-
-
-class RandomEnvEnvSpec(BasaltBaseEnvSpec):
-    """随机生物群系世界 + 九个快捷栏位按槽随机是否放物品及数量，供 random_env_explore 采集。"""
-
-    def __init__(self):
-        super().__init__(
-            name="MineRLRandomEnv-v0",
-            demo_server_experiment_name="random_env",
-            max_episode_steps=6 * MINUTE,
-            preferred_spawn_biome="plains",
-            inventory=[],
-        )
-
-    def create_agent_start(self) -> List[handlers.Handler]:
-        return HumanControlEnvSpec.create_agent_start(self) + [
-            handlers.RandomHotbarPerSlotAgentStart(
-                RANDOM_ENV_ITEM_POOL,
-                slot_occupancy_prob_range=(0.35, 0.85),
-                quantity_range=(1, 64),
-            ),
-            handlers.PreferredSpawnBiome(lambda: random.choice(RANDOM_LANDSCAPE_BIOMES)),
-            handlers.DoneOnDeath(),
         ]

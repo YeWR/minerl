@@ -1,3 +1,4 @@
+import os
 """
 Planning tasks for lifelong learning (MineRL 1.0.2 / MC 1.16).
 
@@ -596,6 +597,141 @@ class ShearSheepAnimalPen(_ShearSheepPlanningMixin, PenAnimalsVillageEnvSpec):
         self.reset()
 
 
+
+
+# ============================================================
+# Biome-domain variants (continual-WM benchmark, 08-25): same planning mixins, FindCave base world,
+# but a different preferred spawn biome. Domain = biome candidate; validated later by transfer matrix.
+# ============================================================
+# PreferredSpawnBiome is only a *preference* (verified 08-25: "desert" spawned desert 1/3 resets), so the
+# world itself is generated as a single biome with Malmo's BiomeGenerator (1.16 numeric biome ids).
+BIOME_DOMAINS = {  # gym-id suffix -> (biome name, 1.16 biome id)
+    "Desert": ("desert", 2), "Taiga": ("taiga", 5), "Swamp": ("swamp", 6), "Mesa": ("mesa", 37),
+    "Jungle": ("jungle", 21), "IcePlains": ("snowy_tundra", 12), "Savanna": ("savanna", 35),
+    "RoofedForest": ("dark_forest", 29),
+    # alternative biome names under test (08-25): snowy_tundra/badlands/dark_forest time out at env start
+    "IceFlats": ("ice_flats", 12), "Mesa2": ("mesa", 37), "RoofedForest2": ("roofed_forest", 29),
+    "SnowyTaiga": ("snowy_taiga", 30), "Mushroom": ("mushroom_fields", 14), "Mountains": ("mountains", 3),
+}
+BIOME_ENV_SPECS = ()
+import os as _os_mod
+
+
+class SeededWorldGenerator(handlers.DefaultWorldGenerator):
+    """DefaultWorldGenerator with an explicit world seed (Malmo supports the seed attribute)."""
+    def __init__(self, seed, force_reset=True, generator_options: str = "{}"):
+        super().__init__(force_reset=force_reset, generator_options=generator_options)
+        self.seed = str(seed)
+    def xml_template(self) -> str:
+        return str("""<DefaultWorldGenerator forceReset="{{force_reset | string | lower}}" seed="{{seed}}" generatorOptions='{{generator_options}}'/>""")
+
+
+def _make_biome_spec(mixin, skill_name, suffix, biome):
+    bname, bid = biome
+    def __init__(self):
+        FindCaveEnvSpec.__init__(self)
+        self.preferred_spawn_biome = bname
+        self.biome_id = bid
+        self.name = f'MineRLPlan{skill_name}Biome{suffix}-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+    def create_server_world_generators(self):
+        # BiomeGenerator is ignored by this Malmo build (verified 08-25); use a FIXED world seed instead and
+        # rely on seed search (policy/find_biome_seeds.py) to pick seeds whose spawn is in the biome.
+        seed = os.environ.get("MINERL_WORLD_SEED")
+        if seed:
+            return [SeededWorldGenerator(seed=seed, force_reset=True)]
+        return [handlers.DefaultWorldGenerator(force_reset=True)]
+    # biome_id must exist BEFORE FindCaveEnvSpec.__init__ builds the mission (it calls the generator hook)
+    return type(f"{skill_name}Biome{suffix}", (mixin, FindCaveEnvSpec),
+                {"__init__": __init__, "create_server_world_generators": create_server_world_generators, "biome_id": bid})
+
+
+for _suffix, _biome in BIOME_DOMAINS.items():
+    for _mixin, _skill in ((_JourneyPlanningMixin, "JourneyToTheDeep"), (_NomadPlanningMixin, "Nomad"),
+                           (_MineStonePlanningMixin, "MineStone")):
+        _cls = _make_biome_spec(_mixin, _skill, _suffix, _biome)
+        globals()[_cls.__name__] = _cls
+        BIOME_ENV_SPECS = BIOME_ENV_SPECS + (_cls,)
+
+
+
+# --- Night regime (review r10): same FindCave world, midnight, time frozen ---
+def _make_night_spec(mixin, skill_name):
+    def __init__(self):
+        FindCaveEnvSpec.__init__(self)
+        self.name = f'MineRLPlan{skill_name}NightCaveHills-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY)
+        self.max_episode_steps = DEFAULT_MAX_STEPS
+        self.reset()
+    def create_server_initial_conditions(self):
+        return [handlers.TimeInitialCondition(allow_passage_of_time=False, start_time=18000),
+                handlers.SpawningInitialCondition(allow_spawning=True)]
+    return type(f"{skill_name}NightCaveHills", (mixin, FindCaveEnvSpec),
+                {"__init__": __init__, "create_server_initial_conditions": create_server_initial_conditions})
+
+
+NIGHT_ENV_SPECS = ()
+for _mixin, _skill in ((_JourneyPlanningMixin, "JourneyToTheDeep"), (_NomadPlanningMixin, "Nomad"), (_MineStonePlanningMixin, "MineStone")):
+    _cls = _make_night_spec(_mixin, _skill); globals()[_cls.__name__] = _cls; NIGHT_ENV_SPECS = NIGHT_ENV_SPECS + (_cls,)
+
+
+
+# --- Harder position tasks (08-26, downstream sensitivity to imagination quality) ---
+class _Journey25Mixin(_PositionPlanningMixin):
+    POS_MODE = 'y_below'; POS_THRESHOLD = 25
+class _Nomad300Mixin(_PositionPlanningMixin):
+    POS_MODE = 'xz_dist'; POS_THRESHOLD = 300
+HARD_ENV_SPECS = ()
+for _mixin, _skill in ((_Journey25Mixin, "JourneyToTheDeep25"), (_Nomad300Mixin, "Nomad300")):
+    for _base, _world in ((FindCaveEnvSpec, "CaveHills"), (MakeWaterfallEnvSpec, "WaterfallMountains")):
+        def __init__(self, _base=_base, _skill=_skill, _world=_world):
+            _base.__init__(self)
+            self.name = f'MineRLPlan{_skill}{_world}-v0'
+            self.inventory = list(UNIVERSAL_INVENTORY)
+            self.max_episode_steps = DEFAULT_MAX_STEPS
+            self.reset()
+        _cls = type(f"{_skill}{_world}", (_mixin, _base), {"__init__": __init__})
+        globals()[_cls.__name__] = _cls; HARD_ENV_SPECS = HARD_ENV_SPECS + (_cls,)
+
+
+
+# --- Suite tasks (codex r15): night-navigation (Nomad300 at night), Sky20 (pillar/ledge), Nomad60 (tunnel-turn after dig prefix) ---
+class _Sky20Mixin(_PositionPlanningMixin):
+    POS_MODE = 'y_above'; POS_THRESHOLD = 20
+class _Nomad60Mixin(_PositionPlanningMixin):
+    POS_MODE = 'xz_dist'; POS_THRESHOLD = 60
+SUITE_ENV_SPECS = ()
+def _mk(mixin, skill, base, world, night=False):
+    def __init__(self, _base=base, _skill=skill, _world=world):
+        _base.__init__(self); self.name = f'MineRLPlan{_skill}{_world}-v0'
+        self.inventory = list(UNIVERSAL_INVENTORY); self.max_episode_steps = DEFAULT_MAX_STEPS; self.reset()
+    d = {"__init__": __init__}
+    if night:
+        def create_server_initial_conditions(self):
+            return [handlers.TimeInitialCondition(allow_passage_of_time=False, start_time=18000), handlers.SpawningInitialCondition(allow_spawning=True)]
+        d["create_server_initial_conditions"] = create_server_initial_conditions
+    return type(f"{skill}{world}", (mixin, base), d)
+for _cls in (_mk(_Nomad300Mixin, "Nomad300", FindCaveEnvSpec, "NightCaveHills", night=True),
+             _mk(_Sky20Mixin, "Skyward20", FindCaveEnvSpec, "CaveHills"), _mk(_Sky20Mixin, "Skyward20", MakeWaterfallEnvSpec, "WaterfallMountains"),
+             _mk(_Nomad60Mixin, "Nomad60", FindCaveEnvSpec, "CaveHills"), _mk(_Nomad60Mixin, "Nomad60", MakeWaterfallEnvSpec, "WaterfallMountains")):
+    globals()[_cls.__name__] = _cls; SUITE_ENV_SPECS = SUITE_ENV_SPECS + (_cls,)
+
+
+class _Nomad20Mixin(_PositionPlanningMixin):
+    POS_MODE = 'xz_dist'; POS_THRESHOLD = 20
+class _Nomad50Mixin(_PositionPlanningMixin):
+    POS_MODE = 'xz_dist'; POS_THRESHOLD = 50
+for _cls in (_mk(_Nomad20Mixin, "Nomad20", FindCaveEnvSpec, "CaveHills"), _mk(_Nomad50Mixin, "Nomad50", FindCaveEnvSpec, "NightCaveHills", night=True)):
+    globals()[_cls.__name__] = _cls; SUITE_ENV_SPECS = SUITE_ENV_SPECS + (_cls,)
+
+
+class _Journey35Mixin(_PositionPlanningMixin):
+    POS_MODE = 'y_below'; POS_THRESHOLD = 35
+for _cls in (_mk(_Journey35Mixin, "JourneyToTheDeep35", FindCaveEnvSpec, "CaveHills"), _mk(_Journey35Mixin, "JourneyToTheDeep35", MakeWaterfallEnvSpec, "WaterfallMountains")):
+    globals()[_cls.__name__] = _cls; SUITE_ENV_SPECS = SUITE_ENV_SPECS + (_cls,)
+
 # ============================================================
 # Registry
 # ============================================================
@@ -607,8 +743,17 @@ ALL_PLANNING_ENV_SPEC_CLASSES = (
     + SKYWARD_ASCENT_ENV_SPECS
     + NOMAD_ENV_SPECS
     + (HuntForMeatAnimalPen, ShearSheepAnimalPen)
+    + BIOME_ENV_SPECS
+    + NIGHT_ENV_SPECS
+    + HARD_ENV_SPECS
+    + SUITE_ENV_SPECS
 )
 
 
 def make_all_planning_envs():
     return [cls() for cls in ALL_PLANNING_ENV_SPEC_CLASSES]
+
+
+# ---- scenario tasks (08-26 redesign): drawn scenarios on random/seeded worlds ----
+from minerl.herobraine.env_specs.scenario_specs import SCENARIO_ENV_SPECS  # noqa: E402
+ALL_PLANNING_ENV_SPEC_CLASSES = ALL_PLANNING_ENV_SPEC_CLASSES + SCENARIO_ENV_SPECS
